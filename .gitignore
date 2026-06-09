@@ -1,0 +1,28 @@
+# Byte-compiled / optimized
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Environments
+.venv/
+venv/
+.env
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Model training artifacts & checkpoints
+runs/
+*.onnx
+*.pt
+*.pth
+
+# Test / output scratch
+clean/
+boxed.jpg
+report*.json

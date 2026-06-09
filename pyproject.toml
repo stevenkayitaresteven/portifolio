@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sentinel-explicit-filter"
+version = "0.1.0"
+description = "Detect and blur explicit content (nudity, gore) in images — offline, on CPU."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["nsfw", "content-moderation", "image-moderation", "nudity-detection",
+            "computer-vision", "opencv", "onnx"]
+dependencies = [
+    "numpy>=1.26,<2",
+    "opencv-python-headless>=4.9,<5",
+]
+
+[project.optional-dependencies]
+# Box-level nudity detector (offline ONNX model ships in the wheel).
+detectors = ["nudenet", "onnxruntime"]
+# Browser UI + HTTP service.
+serve = ["fastapi", "uvicorn[standard]", "python-multipart"]
+# Fine-tuning a custom whole-image classifier (training/export only).
+train = ["torch", "torchvision", "pillow", "onnx"]
+# Running the test suite.
+test = ["pytest"]
+
+[project.scripts]
+# `sentinel ...` is equivalent to `python -m safety ...`
+sentinel = "safety.cli:main"
+
+[tool.setuptools]
+packages = ["safety", "safety.detectors", "safety.train"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

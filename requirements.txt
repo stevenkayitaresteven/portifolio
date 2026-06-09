@@ -1,0 +1,17 @@
+# --- Core (always required) --------------------------------------------------
+# The policy + blur engine need only these two.
+numpy>=1.26,<2
+opencv-python-headless>=4.9,<5
+
+# --- Optional extras (install only what you use) -----------------------------
+# Box-level nudity detector — offline ONNX model ships inside the wheel:
+#     pip install nudenet onnxruntime
+#
+# Browser UI + HTTP service (safety/ui.py, safety/service.py):
+#     pip install fastapi "uvicorn[standard]" python-multipart
+#
+# Fine-tuning a custom classifier (training/export only — see safety/train/):
+#     pip install torch torchvision pillow onnx
+#
+# Or install everything via the package extras (see pyproject.toml):
+#     pip install -e ".[detectors,serve,train]"
