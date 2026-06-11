@@ -130,6 +130,24 @@ def cmd_ui(args) -> int:
     return 0
 
 
+def cmd_chat(args) -> int:
+    try:
+        from .chat import serve
+    except Exception as exc:  # pragma: no cover - missing serving deps
+        print(f"!! the chat UI needs FastAPI + uvicorn: pip install fastapi "
+              f"uvicorn python-multipart  ({exc})", file=sys.stderr)
+        return 1
+    from .multimodal import MultimodalConfig
+
+    cfg = MultimodalConfig.from_env()
+    cfg.safety = _config_from_args(args)
+    if args.no_hf:
+        cfg.use_hf_text = cfg.use_hf_image = cfg.use_hf_audio = False
+    serve(host=args.host, port=args.port, open_browser=not args.no_browser,
+          config=cfg)
+    return 0
+
+
 def cmd_debug(args) -> int:
     from . import load_image, save_image, draw_boxes
 
@@ -148,7 +166,8 @@ def cmd_debug(args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m safety",
-        description="Detect and blur explicit content (nudity, gore) in images.",
+        description="Detect and redact explicit content — images (blur), video, "
+                    "audio, and text (chat UI).",
     )
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--style", choices=["gaussian", "pixelate", "box", "fill"],
@@ -190,6 +209,17 @@ def build_parser() -> argparse.ArgumentParser:
     u.add_argument("--no-browser", action="store_true",
                    help="don't auto-open a browser tab")
     u.set_defaults(func=cmd_ui)
+
+    c = sub.add_parser("chat", parents=[common],
+                       help="launch the WhatsApp-style moderated chat UI "
+                            "(image, video, audio, text)")
+    c.add_argument("--host", default="127.0.0.1", help="bind host")
+    c.add_argument("--port", type=int, default=8000, help="bind port")
+    c.add_argument("--no-browser", action="store_true",
+                   help="don't auto-open a browser tab")
+    c.add_argument("--no-hf", action="store_true",
+                   help="disable the Hugging Face backends (offline fallbacks only)")
+    c.set_defaults(func=cmd_chat)
     return p
 
 

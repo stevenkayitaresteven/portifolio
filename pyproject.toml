@@ -5,21 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sentinel-explicit-filter"
 version = "0.1.0"
-description = "Detect and blur explicit content (nudity, gore) in images — offline, on CPU."
+description = "Detect and redact explicit content across image, video, audio, and text — with a moderated chat UI."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["nsfw", "content-moderation", "image-moderation", "nudity-detection",
-            "computer-vision", "opencv", "onnx"]
+            "toxicity", "profanity-filter", "computer-vision", "opencv", "onnx",
+            "huggingface"]
 dependencies = [
-    "numpy>=1.26,<2",
+    "numpy>=1.26,<3",
     "opencv-python-headless>=4.9,<5",
 ]
 
 [project.optional-dependencies]
 # Box-level nudity detector (offline ONNX model ships in the wheel).
 detectors = ["nudenet", "onnxruntime"]
-# Browser UI + HTTP service.
+# Hugging Face backends for multimodal moderation: toxic-bert (text),
+# Falconsai NSFW ViT (image), Whisper ASR (audio). Audio formats beyond WAV
+# and video soundtracks additionally want the `ffmpeg` binary on PATH.
+hf = ["transformers>=4.45", "torch", "pillow"]
+# Browser UI + HTTP service + the WhatsApp-style chat UI.
 serve = ["fastapi", "uvicorn[standard]", "python-multipart"]
 # Fine-tuning a custom whole-image classifier (training/export only).
 train = ["torch", "torchvision", "pillow", "onnx"]
@@ -31,7 +36,7 @@ test = ["pytest"]
 sentinel = "safety.cli:main"
 
 [tool.setuptools]
-packages = ["safety", "safety.detectors", "safety.train"]
+packages = ["safety", "safety.detectors", "safety.multimodal", "safety.train"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
