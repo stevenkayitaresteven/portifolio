@@ -123,6 +123,8 @@ def _coerce(name: str, ftype, raw: str):
         return float(raw)
     if "tuple" in str(ftype):  # e.g. "0,0,0"
         return tuple(int(x) for x in raw.split(","))
+    if "int" in str(ftype):
+        return int(raw)
     return raw
 
 
