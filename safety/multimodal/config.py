@@ -19,9 +19,21 @@ class MultimodalConfig:
     safety: SafetyConfig = field(default_factory=SafetyConfig.from_env)
 
     # --- Hugging Face checkpoints (fine-tuned, pretrained) --------------------
-    # Multi-label toxicity: toxic / severe_toxic / obscene / threat / insult /
-    # identity_hate. Trained on the Jigsaw toxic-comment datasets.
-    text_model: str = "unitary/toxic-bert"
+    # The text *ensemble*: every model runs, labels are normalized into the
+    # 12-category taxonomy (safety/multimodal/taxonomy.py). The defaults pair
+    # the OpenAI-taxonomy moderation model (sexual / hate / violence /
+    # harassment / self-harm / child-safety) with Jigsaw toxic-bert. A path to
+    # your own checkpoint from safety/train/finetune_text.py works here too.
+    text_models: tuple[str, ...] = ("KoalaAI/Text-Moderation",
+                                    "unitary/toxic-bert")
+    # Specialist additions enabled by use_specialist_text_models:
+    # spam, phishing, and suicidality classifiers.
+    specialist_text_models: tuple[str, ...] = (
+        "mshenoda/roberta-spam",
+        "ealvaradob/bert-finetuned-phishing",
+        "sentinet/suicidality",
+    )
+    use_specialist_text_models: bool = False   # 3 extra model downloads
     # ViT fine-tuned for nsfw/normal binary image classification.
     image_model: str = "Falconsai/nsfw_image_detection"
     # Whisper ASR — audio is transcribed, then the transcript is moderated.
@@ -34,19 +46,41 @@ class MultimodalConfig:
     use_hf_audio: bool = True
 
     # --- Thresholds & policy ---------------------------------------------------
-    # A toxic-bert label at/above this score flags the text.
+    # A model label at/above this score flags the text.
     text_threshold: float = 0.50
     # Flagged text is still delivered with curse words masked (True), or
-    # withheld entirely (False).
+    # withheld entirely (False). Categories whose action is "block"
+    # (hate, violence, self_harm, criminal, ... see taxonomy.DEFAULT_ACTIONS)
+    # are withheld regardless of this switch.
     deliver_flagged_text: bool = True
+    # Per-category action overrides as "category:action" pairs, e.g.
+    # "spam:block,sexual:mask". Categories not listed keep their default.
+    action_overrides: str = ""
     # Content we could not analyze (e.g. audio with no ASR backend) is marked
     # action="flag" so a human can review it; False delivers it silently.
     flag_unscanned: bool = True
+    # Append every moderation decision (metadata only — never the content
+    # itself) as JSON lines to this file. Empty = no audit log.
+    audit_log: str = ""
+
+    # OCR text embedded in images (memes, screenshots) and moderate it like a
+    # message. Needs `pytesseract` + the tesseract binary; skipped when absent.
+    ocr_image_text: bool = True
 
     # --- Video sampling ---------------------------------------------------------
     video_sample_fps: float = 1.0     # analyze ~this many frames per second
     video_max_samples: int = 32       # hard cap on analyzed frames per video
     check_video_audio: bool = True    # also scan the audio track (needs ffmpeg)
+
+    def action_for(self, category: str) -> str:
+        """The configured action for a taxonomy category."""
+        from .taxonomy import DEFAULT_ACTIONS
+
+        for pair in self.action_overrides.split(","):
+            name, _, action = pair.partition(":")
+            if name.strip() == category and action.strip():
+                return action.strip()
+        return DEFAULT_ACTIONS.get(category, "flag")
 
     # --- Env loading -------------------------------------------------------------
     @classmethod

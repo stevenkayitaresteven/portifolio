@@ -1,59 +1,70 @@
-# Sentinel — multimodal explicit-content detection & redaction
+# Sentinel — multimodal content moderation across 12 safety categories
 
-Detect **nudity / sexual content, gore, profanity and toxicity** across
-**images, video, audio, and text** — and act on it: explicit images and video
-are **blurred**, explicit audio is **removed** (with a censored transcript),
-curse words are **masked** (`f***`), and anything that can't be analyzed is
-**flagged** for review. Every verdict comes with a **confidence score**.
+Detect, risk-score, and safely handle harmful content across **text, images,
+video, audio, documents, and file uploads** — in **12 categories**: toxic,
+hate, sexual, violence, self-harm, criminal, cybersecurity, spam, privacy,
+extremism, misinformation, and child-safety. Serious harms are **blocked**,
+explicit media is **blurred**, curse words and PII are **masked** (`f***`,
+`b**@corp.io`), spam/misinformation is **flagged**, and dangerous file uploads
+are **rejected**. Every verdict carries a category, action, and confidence.
 
 It ships as a Python library, a CLI, a **WhatsApp-style chat UI** where every
 message and attachment is moderated before delivery, a drag-and-drop image UI,
-a mountable **HTTP service**, and a **fine-tuning suite**.
+a mountable **HTTP service**, and a **fine-tuning suite** for the 12-category
+text classifier. The full design is in
+[`docs/SAFETY_BLUEPRINT.md`](docs/SAFETY_BLUEPRINT.md).
 
 ```bash
 pip install -e ".[detectors,hf,serve]"
-python -m safety chat        # WhatsApp-style chat: send text / image / video / audio
+python -m safety chat        # WhatsApp-style moderated chat (text/image/video/audio/files)
 python -m safety ui          # single-image drag-and-drop verdict UI
 ```
 
-> **Defensive / content-moderation tool.** It detects and obscures sensitive
+> **Defensive / content-moderation tool.** It detects and obscures harmful
 > content — it does not generate it. **No explicit material is shipped or
 > required to run.**
 
 ---
 
-## The models (Hugging Face + offline fallbacks)
+## What gets caught, and how
 
-Each modality pairs a **fine-tuned pretrained model** from the Hugging Face Hub
-with an **offline fallback**, so the filter degrades gracefully instead of
-failing open when a model (or the network) is unavailable:
+Every detector — HF model, lexicon, regex, file sniffer — normalizes into one
+**12-category taxonomy** with one action per category (the most severe firing
+category wins). Each category has an **offline floor** *and* a **fine-tuned
+Hugging Face model**, so it degrades gracefully instead of failing open:
 
-| Modality | Hugging Face model | Offline fallback | Redaction |
-|---|---|---|---|
-| **Image** | [`Falconsai/nsfw_image_detection`](https://hf.co/Falconsai/nsfw_image_detection) (ViT, whole-frame) | [NudeNet](https://pypi.org/project/nudenet/) ONNX (18 body-part boxes, ships in its wheel) + HSV wound heuristic | solid whole-image **blur** |
-| **Text** | [`unitary/toxic-bert`](https://hf.co/unitary/toxic-bert) (toxic · obscene · threat · insult · identity-hate) | built-in profanity lexicon w/ leetspeak handling | curse words **masked** in place |
-| **Audio** | [`openai/whisper-base`](https://hf.co/openai/whisper-base) ASR → transcript → text chain | flagged as *unscanned* for human review | explicit audio **blocked**, censored transcript shown |
-| **Video** | ~1 frame/s sampling → image ensemble; soundtrack → audio chain | NudeNet/heuristic on sampled frames | re-encoded fully **blurred**, or **muted** if only the audio is explicit |
+| Category | Offline floor (always on) | Hugging Face model(s) |
+|---|---|---|
+| **toxic / hate** | profanity lexicon (leetspeak-aware, masks in place) | [`unitary/toxic-bert`](https://hf.co/unitary/toxic-bert), [`facebook/roberta-hate-speech`](https://hf.co/facebook/roberta-hate-speech-dynabench-r4-target) |
+| **sexual / child_safety** | NudeNet + wound heuristic (image) | [`KoalaAI/Text-Moderation`](https://hf.co/KoalaAI/Text-Moderation), [`Falconsai/nsfw_image_detection`](https://hf.co/Falconsai/nsfw_image_detection) |
+| **violence / self_harm** | phrase lexicons (+ support note) | KoalaAI moderation, [`sentinet/suicidality`](https://hf.co/sentinet/suicidality) |
+| **criminal / cybersecurity / extremism** | phrase lexicons + executable/EICAR file gate | KoalaAI moderation |
+| **spam** | promo + phishing-URL signals | [`mshenoda/roberta-spam`](https://hf.co/mshenoda/roberta-spam), [`ealvaradob/bert-finetuned-phishing`](https://hf.co/ealvaradob/bert-finetuned-phishing) |
+| **privacy** | PII regexes (email/card-Luhn/SSN/phone/IP/IBAN), masked in place | (pairs with [`iiiorg/piiranha-v1`](https://hf.co/iiiorg/piiranha-v1-detect-personal-information)) |
+| **misinformation** | debunked-claim phrases (flag) | a [`liar2`](https://hf.co/datasets/chengxuphd/liar2)-fine-tuned head |
 
-The ensembles are complementary: NudeNet localizes *which* body parts are
-exposed, the ViT judges the whole frame; toxic-bert scores a whole message,
-the lexicon pinpoints (and masks) the individual words — including `f@ck` /
-`sh1t` / `fuuuck` evasions. Fine-tuning data and the deeper model rationale
-live in [`safety/multimodal/README.md`](safety/multimodal/README.md).
+The text moderator runs an **ensemble** (KoalaAI moderation + toxic-bert by
+default; spam/phishing/suicidality specialists opt-in) and merges every label
+into the taxonomy. Models score the *whole message*; the lexicon/regex floor
+*localizes* curse words and PII to mask them in place and keeps working fully
+offline. All HF backends are lazy (download once, cached); without the `[hf]`
+extra or network, the offline floor carries the load.
 
-All HF backends are lazy: models download once on first use (cached by
-`transformers`); without the `[hf]` extra or without network, the offline
-fallbacks carry the load. The original core (policy + blur engine) still
-depends only on `numpy` + `opencv`.
+Train your own 12-category classifier with
+[`safety/train/finetune_text.py`](safety/train/finetune_text.py) (presets for
+nvidia Aegis 2.0, Jigsaw, LIAR2) and drop it in via `SAFETY_MM_TEXT_MODELS`.
 
 ## Architecture
 
 ```
-                          ┌── text ──► lexicon + toxic-bert ─► mask / flag / block
- chat message / file ──►  ├── image ─► NudeNet · ViT · heuristic ─► policy ─► blur
- (one file at a time)     ├── audio ─► whisper ─► transcript ─► text chain ─► block + transcript
-                          └── video ─► frame sampler ─► image chain ─► blur ─┐
-                                       soundtrack ───► audio chain ──► mute ─┴► re-encode
+                          ┌── text ──► lexicon · PII regex · phrases · spam/URL · HF ensemble ─► 12-cat
+ message / upload  ──►     ├── image ─► NudeNet · ViT · wound · OCR-of-embedded-text ─► blur
+ (one item)               ├── audio ─► whisper ─► transcript ─► text chain ─► block + transcript
+ router by modality       ├── video ─► frame sampler ─► image chain + soundtrack ─► blur / mute
+                          └── file  ─► magic bytes · extension · EICAR ─► block (cybersecurity)
+                                       │
+                                       ▼  risk score ─► policy (action per category) ─►
+                                       allow / flag / mask / blur / mute / block  + audit
 ```
 
 - **Detectors** (`safety/detectors/`) — pluggable, lazy, report `available`.
@@ -119,11 +130,28 @@ python -m safety blur    ./photos --style pixelate --min-severity high
 from safety.multimodal import MultimodalModerator
 
 mod = MultimodalModerator()
-res = mod.moderate_text("what the f@ck")     # res.censored_text == "what the f***"
+mod.moderate_text("what the f@ck").censored_text       # "what the f***"   (mask, toxic)
+mod.moderate_text("i will kill you").action            # "block"           (violence)
+mod.moderate_text("my ssn is 123-45-6789").censored_text  # masked          (privacy)
+mod.moderate_text("CLAIM your PRIZE http://x.tk").action  # "flag"          (spam)
+
 delivered, res = mod.moderate_file("photo.jpg")   # blurred copy when explicit
 delivered, res = mod.moderate_file("voice.ogg")   # None (blocked) when explicit
-delivered, res = mod.moderate_file("clip.mp4")    # blurred/muted re-encode
+delivered, res = mod.moderate_file("report.pdf")  # text extracted + moderated
 print(res.to_dict())                              # action, categories, confidence…
+
+# the file gate runs before modality moderation
+from safety.multimodal import check_file_safety
+check_file_safety("setup.exe", data)              # -> block (cybersecurity)
+```
+
+### Fine-tune the 12-category classifier
+
+```bash
+pip install -e ".[train]"
+python -m safety.train.finetune_text --preset aegis2 --out runs/aegis   # nvidia Aegis 2.0
+python -m safety.train.finetune_text --preset jigsaw --data train.csv --out runs/jigsaw
+SAFETY_MM_TEXT_MODELS=runs/aegis python -m safety chat                   # use your model
 ```
 
 The image-only API is unchanged:
@@ -162,32 +190,46 @@ Highlights:
 | `solid_blur` / `solid_blur_blocks` | `true` / 6 | heavy, unrecognizable whole-image blur |
 | `nudity_threshold` / `gore_threshold` | 0.35 / 0.55 | per-category score floors |
 | `min_blur_severity` | `medium` | `low` also blurs suggestive; `high` only explicit |
-| `SAFETY_MM_TEXT_THRESHOLD` | 0.50 | toxic-bert score that flags a message |
-| `SAFETY_MM_DELIVER_FLAGGED_TEXT` | `true` | mask & deliver vs block flagged text |
-| `SAFETY_MM_FLAG_UNSCANNED` | `true` | unanalyzable content is flagged, not waved through |
+| `SAFETY_MM_TEXT_MODELS` | KoalaAI + toxic-bert | comma-separated HF checkpoints (or a local fine-tune) |
+| `SAFETY_MM_USE_SPECIALIST_TEXT_MODELS` | `false` | add spam / phishing / suicidality specialists |
+| `SAFETY_MM_TEXT_THRESHOLD` | 0.50 | model label score that flags a message |
+| `SAFETY_MM_ACTION_OVERRIDES` | — | per-category action, e.g. `spam:block,sexual:mask` |
+| `SAFETY_MM_DELIVER_FLAGGED_TEXT` | `true` | mask & deliver vs block-everything-flagged |
+| `SAFETY_MM_OCR_IMAGE_TEXT` | `true` | OCR text inside images (memes/screenshots) |
+| `SAFETY_MM_AUDIT_LOG` | — | append decisions (metadata only) to this JSONL file |
 | `SAFETY_MM_VIDEO_SAMPLE_FPS` | 1.0 | analyzed frames per second of video |
 
 ```bash
-SAFETY_SOLID_BLUR_BLOCKS=3 python -m safety chat     # near-solid color block
-SAFETY_MM_ASR_MODEL=openai/whisper-tiny python -m safety chat   # faster ASR
+SAFETY_MM_ACTION_OVERRIDES=spam:block python -m safety chat      # block spam outright
+SAFETY_MM_USE_SPECIALIST_TEXT_MODELS=1 python -m safety chat     # +3 specialist models
+SAFETY_MM_AUDIT_LOG=decisions.jsonl python -m safety chat        # write an audit trail
 ```
 
-## Train your own classifier
+## Train your own models
 
-The detectors work out of the box. For a **learned gore model** or a
-whole-image NSFW score tuned to your data, see
-[`safety/train/README.md`](safety/train/README.md):
+**Text (12-category multi-label)** —
+[`safety/train/finetune_text.py`](safety/train/finetune_text.py). Presets with
+verified column mappings for nvidia Aegis 2.0, Jigsaw, and LIAR2; per-category
+precision/recall/F1 + micro/macro metrics; exports straight into the chat:
 
 ```bash
-pip install torch torchvision pillow onnx
+pip install -e ".[train]"
+python -m safety.train.finetune_text --preset aegis2 --out runs/aegis
+python -m safety.train.finetune_text --eval-only --preset jigsaw --data dev.csv \
+    --model runs/aegis                                   # metrics only
+SAFETY_MM_TEXT_MODELS=runs/aegis python -m safety chat
+```
+
+**Image (gore / NSFW)** — [`safety/train/README.md`](safety/train/README.md):
+
+```bash
 python -m safety.train.train  --data ./data --epochs 8 --out runs/v1
 python -m safety.train.export runs/v1/best.pt --out runs/v1/model.onnx
 python -m safety blur ./photos --classifier runs/v1/model.onnx
 ```
 
-The Jigsaw toxic-comment datasets on the Hub (e.g.
-[`anitamaxvim/jigsaw-toxic-comments`](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments))
-are the natural starting point for specializing the text model.
+Dataset and model recommendations for every category are in
+[`docs/SAFETY_BLUEPRINT.md`](docs/SAFETY_BLUEPRINT.md).
 
 ## Tests
 

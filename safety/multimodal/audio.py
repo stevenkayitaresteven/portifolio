@@ -96,14 +96,24 @@ class AudioModerator:
             )
 
         text_res = self.text.moderate(transcript)
+        # Sound can't be masked or partially redacted: flag-only categories
+        # (spam, misinformation) deliver with a warning; anything stronger
+        # blocks the clip and surfaces only the censored transcript.
+        if not text_res.flagged:
+            action = ACTION_NONE
+        elif text_res.action == ACTION_FLAG:
+            action = ACTION_FLAG
+        else:
+            action = ACTION_BLOCK
         res = ModerationResult(
             modality="audio",
             flagged=text_res.flagged,
-            action=ACTION_BLOCK if text_res.flagged else ACTION_NONE,
+            action=action,
             categories=list(text_res.categories),
             scores=dict(text_res.scores),
             reasons=[f"transcript: {r}" for r in text_res.reasons],
             detectors=[f"hf:{self.config.asr_model}", *text_res.detectors],
             transcript=text_res.censored_text,
+            extra=dict(text_res.extra),
         )
         return res

@@ -1,20 +1,29 @@
-"""A WhatsApp-style chat UI with built-in multimodal content moderation.
+"""A WhatsApp-style chat UI with built-in 12-category content moderation.
 
 Run ``python -m safety chat`` and a chat page opens. You can type messages and
-attach **one file at a time** — image, video, audio, or text document. Every
-message passes through the :class:`~safety.multimodal.MultimodalModerator`
-before it lands in the conversation:
+attach **one file at a time** — image, video, audio, or document. Every message
+passes through the :class:`~safety.multimodal.MultimodalModerator` (12 safety
+categories: toxic, hate, sexual, violence, self-harm, criminal, cybersecurity,
+spam, privacy, extremism, misinformation, child-safety) before it lands in the
+conversation:
 
-* **text** — curse words are masked in place (``f***``); model-flagged
-  hostility is delivered with a warning badge (toxic-bert).
-* **image** — explicit images (nudity / gore) are delivered **blurred**, with
-  the category and confidence shown on the bubble.
+* **text** — curse words and PII are masked in place (``f***``,
+  ``b**@corp.io``); serious harms (threats, hate, fraud, malware, extremism)
+  are **blocked**; spam/misinformation is delivered with a warning badge.
+  Self-harm is blocked with a support-resources note.
+* **image** — explicit images (nudity / gore) are delivered **blurred**;
+  harmful *text* embedded in memes/screenshots is caught via OCR.
 * **video** — explicit clips are re-encoded fully blurred; clips whose *audio*
   is explicit are delivered muted.
 * **audio** — voice notes are transcribed (Whisper) and moderated; explicit
   audio is **removed** and replaced by its censored transcript.
-* **documents** (.txt/.md/...) — content is moderated like text; a censored
-  copy is what gets shared.
+* **documents** (.txt/.md/.pdf/.docx/...) — text is extracted and moderated;
+  a censored copy is what gets shared.
+* **dangerous files** (executables, archives, malware signatures) — **blocked**
+  outright by extension, magic bytes, and EICAR check.
+
+Decisions are recorded to ``/chat/audit`` (metadata only — never the harmful
+content itself).
 
 The page is one self-contained HTML file (no build step, no CDN). State is
 in-memory + a temp media dir — it's a demo surface for the moderation engine,
@@ -22,6 +31,7 @@ not a messaging backend.
 """
 from __future__ import annotations
 
+import json
 import mimetypes
 import os
 import shutil
@@ -30,6 +40,7 @@ import time
 import uuid
 
 from .multimodal import MultimodalModerator, MultimodalConfig, modality_for
+from .multimodal.filecheck import check_file_safety
 from .multimodal.result import ACTION_BLOCK
 
 try:
@@ -69,7 +80,7 @@ def create_chat_app(config: MultimodalConfig | None = None,
         return f"/chat/media/{mid}"
 
     def _result_fields(res) -> dict:
-        return {
+        fields = {
             "flagged": res.flagged,
             "action": res.action,
             "categories": sorted(res.categories),
@@ -78,11 +89,35 @@ def create_chat_app(config: MultimodalConfig | None = None,
             "detectors": res.detectors,
             "scanned": res.scanned,
         }
+        if res.extra.get("support_note"):
+            fields["support_note"] = res.extra["support_note"]
+        return fields
+
+    audit_path = (config.audit_log if config else "") or \
+        (mod.config.audit_log if hasattr(mod, "config") else "")
+    audit_tail: list[dict] = []
+
+    def _audit(msg: dict) -> None:
+        """Record the *decision*, never the content (safe-handling: harmful
+        content is not amplified into logs)."""
+        entry = {k: msg.get(k) for k in
+                 ("id", "ts", "kind", "filename", "flagged", "action",
+                  "categories", "confidence", "reasons", "detectors", "scanned")}
+        entry["date"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        audit_tail.append(entry)
+        del audit_tail[:-500]
+        if audit_path:
+            try:
+                with open(audit_path, "a", encoding="utf-8") as fh:
+                    fh.write(json.dumps(entry) + "\n")
+            except OSError:
+                pass
 
     def _push(msg: dict) -> dict:
         msg["id"] = uuid.uuid4().hex[:12]
         msg["ts"] = time.strftime("%H:%M")
         messages.append(msg)
+        _audit(msg)
         return msg
 
     @app.get("/", response_class=HTMLResponse)
@@ -96,6 +131,11 @@ def create_chat_app(config: MultimodalConfig | None = None,
     @app.get("/chat/messages")
     def list_messages():
         return {"messages": messages}
+
+    @app.get("/chat/audit")
+    def audit(limit: int = 100):
+        """Moderation decisions (metadata only) — the moderator's view."""
+        return {"decisions": audit_tail[-max(1, min(limit, 500)):]}
 
     @app.get("/chat/media/{mid}")
     def get_media(mid: str):
@@ -136,18 +176,25 @@ def create_chat_app(config: MultimodalConfig | None = None,
 
     async def _handle_file(upload: UploadFile, caption: dict | None) -> dict:
         name = os.path.basename(upload.filename or "file")
+        data = await upload.read()
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="file too large (100 MB max)")
+        if not data:
+            raise HTTPException(status_code=400, detail="empty file")
+
+        # Executables, archives, and malware test signatures never get relayed,
+        # whatever their claimed type (magic bytes beat renamed extensions).
+        danger = check_file_safety(name, data)
+        if danger is not None:
+            return {"kind": "file", "filename": name, "media": None,
+                    **_result_fields(danger)}
+
         modality = modality_for(name, upload.content_type)
         if modality is None:
             raise HTTPException(
                 status_code=400,
                 detail="unsupported file type — send an image, video, "
                        "audio file, or text document")
-
-        data = await upload.read()
-        if len(data) > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=413, detail="file too large (100 MB max)")
-        if not data:
-            raise HTTPException(status_code=400, detail="empty file")
 
         msg: dict = {"kind": modality, "filename": name}
         if caption:
@@ -291,6 +338,9 @@ CHAT_HTML = r"""<!doctype html>
   .blocked .ico{font-size:20px}
   .blocked b{color:var(--danger);font-size:13.5px}
   .blocked .tr{font-size:13px;color:var(--muted);font-style:italic;margin-top:4px}
+  .support{margin-top:7px;font-size:12.5px;color:#7be3a8;background:rgba(46,204,113,.1);
+        border:1px solid rgba(46,204,113,.3);border-radius:8px;padding:7px 10px;
+        max-width:320px}
   .doc{display:flex;gap:10px;align-items:center;background:rgba(255,255,255,.06);
        border-radius:8px;padding:10px 12px;width:300px;max-width:100%}
   .doc .ico{font-size:22px}
@@ -336,13 +386,15 @@ CHAT_HTML = r"""<!doctype html>
   <div class="avatar">🛡️</div>
   <div>
     <h1>Sentinel Chat</h1>
-    <div class="status" id="status">multimodal moderation · image · video · audio · text</div>
+    <div class="status" id="status">12-category moderation · text · image · video · audio · files</div>
   </div>
 </header>
 
 <div id="chat">
-  <div class="day">Messages are scanned before delivery — explicit images &amp; video
-  are <b>blurred</b>, explicit audio is <b>removed</b>, curse words are <b>masked</b>.</div>
+  <div class="day">Messages are scanned before delivery across 12 categories —
+  hate, threats, sexual, self-harm, fraud, malware, spam, PII &amp; more.
+  Explicit media is <b>blurred</b>, curse words &amp; PII are <b>masked</b>,
+  dangerous files &amp; serious harms are <b>blocked</b>.</div>
 </div>
 <div class="err" id="err"></div>
 
@@ -441,11 +493,22 @@ function caption(m){
   return '<div class="body caption">'+esc(m.caption)
     +(m.caption_flagged?' <span class="pill flag" style="margin:0">filtered</span>':'')+'</div>';
 }
+function supportNote(m){
+  return m.support_note
+    ? '<div class="support">💚 '+esc(m.support_note)+'</div>':'';
+}
 function render(m){
   const div=document.createElement('div'); div.className='msg';
   let inner='';
-  if(m.kind==='text'){
-    inner=pill(m)+'<div class="body">'+esc(m.text)+'</div>'+reasons(m);
+  if(m.kind==='file'){            // dangerous upload (executable / malware)
+    inner=pill(m)+blockedCard('File blocked — '+esc(m.filename||'file'),m)
+         +reasons(m);
+  }else if(m.kind==='text'){
+    inner=pill(m)+(m.action==='block'
+        ? blockedCard('Message blocked'+((m.categories||[]).length
+              ? ' — '+esc(m.categories.join(', ')):''),m)
+        : '<div class="body">'+esc(m.text)+'</div>')
+        +supportNote(m)+reasons(m);
   }else if(m.kind==='image'){
     inner=pill(m)+'<img src="'+m.media+'" alt="image">'+caption(m)+reasons(m);
   }else if(m.kind==='video'){
@@ -455,10 +518,10 @@ function render(m){
   }else if(m.kind==='audio'){
     inner=pill(m)+(m.media
         ? '<audio controls src="'+m.media+'"></audio>'
-        : blockedCard('Voice message removed — explicit language',m))
-        +caption(m)+reasons(m);
+        : blockedCard('Voice message removed',m))
+        +caption(m)+supportNote(m)+reasons(m);
   }else{ // document
-    inner=pill(m)+docCard(m)+caption(m)+reasons(m);
+    inner=pill(m)+docCard(m)+caption(m)+supportNote(m)+reasons(m);
   }
   div.innerHTML='<div class="bubble">'+inner
     +'<div class="meta">'+esc(m.ts||'')+' <span class="tick">✓✓</span></div></div>';

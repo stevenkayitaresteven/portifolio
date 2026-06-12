@@ -121,8 +121,12 @@ def _coerce(name: str, ftype, raw: str):
         return raw.strip().lower() in {"1", "true", "yes", "on"}
     if "float" in str(ftype):
         return float(raw)
-    if "tuple" in str(ftype):  # e.g. "0,0,0"
-        return tuple(int(x) for x in raw.split(","))
+    if "tuple" in str(ftype):  # e.g. "0,0,0" or "a,b,c"
+        parts = [x.strip() for x in raw.split(",") if x.strip()]
+        try:
+            return tuple(int(x) for x in parts)
+        except ValueError:
+            return tuple(parts)
     if "int" in str(ftype):
         return int(raw)
     return raw

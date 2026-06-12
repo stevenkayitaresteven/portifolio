@@ -72,7 +72,7 @@ def test_curse_words_are_masked_and_flagged():
     assert msg["flagged"] and msg["action"] == "mask"
     assert "f******" in msg["text"]
     assert "fucking" not in msg["text"]
-    assert "profanity" in msg["categories"]
+    assert "toxic" in msg["categories"]
 
 
 def test_empty_message_is_rejected():
@@ -91,10 +91,23 @@ def test_only_one_file_at_a_time():
     assert "one file" in r.json()["detail"]
 
 
-def test_unsupported_file_type_is_rejected():
+def test_executable_upload_is_blocked_not_relayed():
     client = make_client()
     r = client.post("/chat/send", files=[
         ("files", ("evil.exe", io.BytesIO(b"MZ..."), "application/x-msdownload")),
+    ])
+    assert r.status_code == 200
+    (msg,) = r.json()["messages"]
+    assert msg["kind"] == "file"
+    assert msg["flagged"] and msg["action"] == "block"
+    assert "cybersecurity" in msg["categories"]
+    assert msg["media"] is None
+
+
+def test_unsupported_file_type_is_rejected():
+    client = make_client()
+    r = client.post("/chat/send", files=[
+        ("files", ("data.xyz", io.BytesIO(b"\x00\x01\x02"), "application/octet-stream")),
     ])
     assert r.status_code == 400
 

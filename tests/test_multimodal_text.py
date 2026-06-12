@@ -69,8 +69,8 @@ def test_moderator_masks_and_flags():
     assert res.flagged
     assert res.action == "mask"
     assert "f******" in res.censored_text
-    assert "profanity" in res.categories
-    assert res.scores["profanity"] == 1.0
+    assert "toxic" in res.categories
+    assert res.scores["toxic"] == 1.0
     assert "lexicon" in res.detectors
 
 
