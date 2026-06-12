@@ -33,9 +33,17 @@ checkpoint you fine-tune with
 [`safety/train/finetune_text.py`](../train/finetune_text.py) slots in via
 `SAFETY_MM_TEXT_MODELS=runs/your-model`.
 
-**Datasets** for specializing the models (schemas verified, presets in
-`finetune_text.py`): [`nvidia/Aegis-AI-Content-Safety-2.0`](https://hf.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0)
-(12+ categories), [`jigsaw-toxic-comments`](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments),
+**Datasets** for specializing the models (schemas verified, 12 presets in
+`finetune_text.py`, mixable via `--mix`):
+[`nvidia/Aegis-AI-Content-Safety-2.0`](https://hf.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0)
+(12+ categories), Jigsaw toxic + [unintended-bias](https://www.kaggle.com/c/jigsaw-unintended-bias-in-toxicity-classification),
+[`google/civil_comments`](https://hf.co/datasets/google/civil_comments) (~2M),
+[`hatexplain`](https://hf.co/datasets/Hate-speech-CNERG/hatexplain),
+[`tdavidson/hate_speech_offensive`](https://hf.co/datasets/tdavidson/hate_speech_offensive),
+[`toxigen`](https://hf.co/datasets/toxigen/toxigen-data) (implicit hate),
+[`textdetox`](https://hf.co/datasets/textdetox/multilingual_toxicity_dataset)
+(14 languages), OLID/SOLID, cyberbullying,
+[`go_emotions`](https://hf.co/datasets/go_emotions) (benign hard negatives),
 [`chengxuphd/liar2`](https://hf.co/datasets/chengxuphd/liar2) (misinformation),
 [`ai4privacy/pii-masking-400k`](https://hf.co/datasets/ai4privacy/pii-masking-400k).
 The full dataset/model/deployment rationale is in

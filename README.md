@@ -51,8 +51,11 @@ offline. All HF backends are lazy (download once, cached); without the `[hf]`
 extra or network, the offline floor carries the load.
 
 Train your own 12-category classifier with
-[`safety/train/finetune_text.py`](safety/train/finetune_text.py) (presets for
-nvidia Aegis 2.0, Jigsaw, LIAR2) and drop it in via `SAFETY_MM_TEXT_MODELS`.
+[`safety/train/finetune_text.py`](safety/train/finetune_text.py) — 12 dataset
+presets (nvidia Aegis 2.0, Jigsaw + Jigsaw Unintended Bias, Civil Comments,
+HateXplain, Davidson, ToxiGen, OLID/SOLID, textdetox multilingual,
+cyberbullying, GoEmotions hard negatives, LIAR2), mixable into one balanced
+corpus with `--mix` — and drop it in via `SAFETY_MM_TEXT_MODELS`.
 
 ## Architecture
 
@@ -150,9 +153,25 @@ check_file_safety("setup.exe", data)              # -> block (cybersecurity)
 ```bash
 pip install -e ".[train]"
 python -m safety.train.finetune_text --preset aegis2 --out runs/aegis   # nvidia Aegis 2.0
+
+# one balanced toxicity corpus from four Hub datasets (implicit hate via
+# ToxiGen, hate-vs-profanity via Davidson, scale via Civil Comments, and
+# GoEmotions benign hard negatives to cut false positives):
+python -m safety.train.finetune_text \
+    --mix civil_comments,davidson,toxigen,goemotions \
+    --max-per-source 50000 --out runs/toxicity-v2
+
 python -m safety.train.finetune_text --preset jigsaw --data train.csv --out runs/jigsaw
-SAFETY_MM_TEXT_MODELS=runs/aegis python -m safety chat                   # use your model
+python -m safety.train.finetune_text --preset textdetox --split es \
+    --model microsoft/mdeberta-v3-base --out runs/es      # multilingual
+
+SAFETY_MM_TEXT_MODELS=runs/toxicity-v2 python -m safety chat   # use your model
 ```
+
+All 12 presets: `aegis2` · `jigsaw` · `jigsaw_bias` · `civil_comments` ·
+`hatexplain` · `davidson` · `toxigen` · `textdetox` · `olid` ·
+`cyberbullying` · `goemotions` · `liar2` — schemas and label mappings in
+[`docs/SAFETY_BLUEPRINT.md`](docs/SAFETY_BLUEPRINT.md) Layer 1.
 
 The image-only API is unchanged:
 
