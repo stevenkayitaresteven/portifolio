@@ -1,45 +1,65 @@
-# `safety.multimodal` — sensitive-content moderation for text, image, audio & video
+# `safety.multimodal` — 12-category moderation for text, image, audio, video & files
 
 One front door (`MultimodalModerator`) routes any content to a per-modality
-moderator. Each moderator pairs a **fine-tuned pretrained Hugging Face model**
-with an **offline fallback**, and everything returns the same
-`ModerationResult`, so a caller can act uniformly: mask, blur, mute, block,
-or flag.
+moderator. Every detector — HF model, lexicon, regex, file sniffer — normalizes
+its labels into **one 12-category taxonomy**, and everything returns the same
+`ModerationResult`, so a caller acts uniformly: mask, blur, mute, flag, or block.
 
-## Models & datasets
+## The 12 categories
 
-| Modality | Primary model (Hugging Face) | What it was trained on | Offline fallback |
-|---|---|---|---|
-| **Text** | [`unitary/toxic-bert`](https://hf.co/unitary/toxic-bert) — BERT, 6 labels (toxic, severe_toxic, obscene, threat, insult, identity_hate) | [Jigsaw toxic-comment datasets](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments) | built-in profanity lexicon (`wordlist.py`) |
-| **Image** | [`Falconsai/nsfw_image_detection`](https://hf.co/Falconsai/nsfw_image_detection) — ViT, nsfw/normal | proprietary 80k-image NSFW corpus | NudeNet (ONNX in the wheel) + wound heuristic |
-| **Audio** | [`openai/whisper-base`](https://hf.co/openai/whisper-base) ASR → transcript → text moderator | 680k h multilingual speech | none → marked *unscanned* and flagged for review |
-| **Video** | frame sampling → image ensemble; soundtrack → audio chain | (composition of the above) | NudeNet/heuristic on sampled frames |
+`toxic` · `hate` · `sexual` · `violence` · `self_harm` · `criminal` ·
+`cybersecurity` · `spam` · `privacy` · `extremism` · `misinformation` ·
+`child_safety` (see [`taxonomy.py`](taxonomy.py)). Each maps to a default
+action; the most severe firing category wins. Overridable via
+`SAFETY_MM_ACTION_OVERRIDES="spam:block,sexual:mask"`.
 
-Useful fine-tuning data if you want to specialize the models:
-[jigsaw-toxic-comments](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments)
-(text, multi-label), [processed-jigsaw](https://hf.co/datasets/Koushim/processed-jigsaw-toxic-comments)
-(pre-tokenized), and for images the corpora referenced by
-[strangerguardhf/nsfw-image-detection](https://hf.co/strangerguardhf/nsfw-image-detection).
-The repo's own training suite (`safety/train/`) fine-tunes a whole-image
-classifier from a folder of labeled images.
+## How each category is detected
 
-Why two layers for text? The model scores the *whole message* and catches
-hostility a wordlist can't ("go back where you came from"); the lexicon
-localizes the *individual* curse words — including `f*ck`, `f@ck`, `sh1t`,
-`fuuuck` evasions — so they can be masked in place, WhatsApp-style. The same
-split shows up in audio (model transcribes, lexicon censors the transcript)
-and images (NudeNet localizes, the ViT judges the whole frame).
+| Category | Offline floor (always on) | Hugging Face model |
+|---|---|---|
+| toxic / hate | profanity lexicon (mask in place) | `unitary/toxic-bert`, `facebook/roberta-hate-speech-dynabench-r4` |
+| sexual / child_safety | NudeNet + wound heuristic (image) | `KoalaAI/Text-Moderation` (text), `Falconsai/nsfw_image_detection` (image) |
+| violence / self_harm | phrase lexicons | KoalaAI moderation, `sentinet/suicidality` (opt-in) |
+| criminal / cybersecurity / extremism | phrase lexicons + executable/EICAR file gate | KoalaAI moderation |
+| spam | promo + phishing-URL signals | `mshenoda/roberta-spam`, `ealvaradob/bert-finetuned-phishing` (opt-in) |
+| privacy | PII regexes (email/card-Luhn/SSN/phone/IP/IBAN), masked in place | (pairs with `iiiorg/piiranha-v1` token model) |
+| misinformation | debunked-claim phrases (flag only) | a `liar2`-fine-tuned head |
+
+The text moderator runs an **ensemble**: `KoalaAI/Text-Moderation` (DeBERTa, the
+OpenAI moderation taxonomy: sexual/hate/violence/harassment/self-harm/minors) +
+`unitary/toxic-bert` (Jigsaw labels) by default; spam, phishing, and
+suicidality specialists are one flag away (`use_specialist_text_models`). A
+checkpoint you fine-tune with
+[`safety/train/finetune_text.py`](../train/finetune_text.py) slots in via
+`SAFETY_MM_TEXT_MODELS=runs/your-model`.
+
+**Datasets** for specializing the models (schemas verified, presets in
+`finetune_text.py`): [`nvidia/Aegis-AI-Content-Safety-2.0`](https://hf.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0)
+(12+ categories), [`jigsaw-toxic-comments`](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments),
+[`chengxuphd/liar2`](https://hf.co/datasets/chengxuphd/liar2) (misinformation),
+[`ai4privacy/pii-masking-400k`](https://hf.co/datasets/ai4privacy/pii-masking-400k).
+The full dataset/model/deployment rationale is in
+[`docs/SAFETY_BLUEPRINT.md`](../../docs/SAFETY_BLUEPRINT.md).
+
+Why layered? Models score the *whole message* and catch hostility a wordlist
+can't ("go back where you came from"); the lexicon/regex floor *localizes* curse
+words and PII so they can be masked in place (`f***`, `b**@corp.io`) — including
+`f@ck` / `sh1t` / `fuuuck` evasions — and keeps working fully offline.
 
 ## Actions
 
 | `action` | Meaning |
 |---|---|
 | `none`  | clean — delivered untouched |
-| `mask`  | text delivered with curse words masked (`f***`) |
-| `blur`  | image/video delivered with pixels redacted (solid whole-frame blur by default) |
+| `flag`  | delivered with a warning badge (spam, misinformation, unscannable media) |
+| `mask`  | text delivered with curse words / PII masked (`f***`, `b**@corp.io`) |
+| `blur`  | image/video delivered with pixels redacted (solid whole-frame blur) |
 | `mute`  | video visuals clean but soundtrack explicit — delivered silent |
-| `block` | withheld entirely (explicit audio; flagged text when `deliver_flagged_text=False`) |
-| `flag`  | delivered but marked for human review (model-only text hit, unscannable media) |
+| `block` | withheld entirely (hate/violence/sexual/self-harm/criminal/cyber/extremism/child-safety, dangerous files) |
+
+Default action per category lives in `taxonomy.DEFAULT_ACTIONS`. Self-harm
+blocks **and** attaches a support-resources note. Blocked content is never
+echoed back; the audit log (`/chat/audit`) records the decision, not the body.
 
 ## Usage
 

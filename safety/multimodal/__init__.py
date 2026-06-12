@@ -30,19 +30,23 @@ from __future__ import annotations
 
 from .result import ModerationResult
 from .config import MultimodalConfig
+from .taxonomy import CATEGORIES
 from .text import TextModerator
 from .image import ImageModerator
 from .audio import AudioModerator
 from .video import VideoModerator
+from .filecheck import check_file_safety
 from .pipeline import MultimodalModerator, modality_for
 
 __all__ = [
     "ModerationResult",
     "MultimodalConfig",
+    "CATEGORIES",
     "TextModerator",
     "ImageModerator",
     "AudioModerator",
     "VideoModerator",
     "MultimodalModerator",
     "modality_for",
+    "check_file_safety",
 ]

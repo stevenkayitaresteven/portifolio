@@ -20,14 +20,18 @@ dependencies = [
 [project.optional-dependencies]
 # Box-level nudity detector (offline ONNX model ships in the wheel).
 detectors = ["nudenet", "onnxruntime"]
-# Hugging Face backends for multimodal moderation: toxic-bert (text),
+# Hugging Face backends for multimodal moderation: the text moderation
+# ensemble (KoalaAI/Text-Moderation + toxic-bert + optional specialists),
 # Falconsai NSFW ViT (image), Whisper ASR (audio). Audio formats beyond WAV
 # and video soundtracks additionally want the `ffmpeg` binary on PATH.
 hf = ["transformers>=4.45", "torch", "pillow"]
+# Extra file/upload analysis: PDF text extraction and image OCR (memes,
+# screenshots). DOCX extraction needs no extra dep (stdlib zip+XML).
+files = ["pypdf", "pytesseract", "pillow"]
 # Browser UI + HTTP service + the WhatsApp-style chat UI.
 serve = ["fastapi", "uvicorn[standard]", "python-multipart"]
-# Fine-tuning a custom whole-image classifier (training/export only).
-train = ["torch", "torchvision", "pillow", "onnx"]
+# Fine-tuning the multi-label text classifier and the image classifier.
+train = ["torch", "torchvision", "transformers>=4.45", "datasets", "pillow", "onnx"]
 # Running the test suite.
 test = ["pytest"]
 
