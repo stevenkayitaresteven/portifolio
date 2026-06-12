@@ -8,19 +8,41 @@ straight into the chat::
 
     SAFETY_MM_TEXT_MODELS=runs/teamsafety python -m safety chat
 
-Data can come from a local CSV/JSONL or a Hub dataset. Presets ship for the
-key public corpora (schemas verified):
+Data can come from a local CSV/TSV/JSONL or a Hub dataset, and several presets
+can be **mixed into one corpus** (``--mix``). Presets ship for the key public
+corpora (schemas verified on the Hub):
 
-* ``jigsaw``  — Jigsaw toxic comments (toxic/hate/threat multi-label)
-* ``aegis2``  — nvidia/Aegis-AI-Content-Safety-Dataset-2.0 (12+ violation
-  categories incl. criminal planning, fraud, malware, suicide, PII)
-* ``liar2``   — chengxuphd/liar2 fact-checked claims → misinformation
+================= ============================================== ====================
+ Preset             Source                                          Trains
+================= ============================================== ====================
+ ``aegis2``         nvidia/Aegis-AI-Content-Safety-Dataset-2.0     12+ categories
+ ``jigsaw``         Jigsaw toxic comments (Kaggle CSV)             toxic/hate/violence
+ ``jigsaw_bias``    Jigsaw unintended-bias 1.8M (Kaggle CSV)       toxic/hate/sexual
+ ``civil_comments`` google/civil_comments (~2M)                    toxic/hate/violence/sexual
+ ``hatexplain``     Hate-speech-CNERG/hatexplain (script dataset)  hate/toxic
+ ``davidson``       tdavidson/hate_speech_offensive (~25K tweets)  hate/toxic
+ ``toxigen``        toxigen/toxigen-data ``annotated`` (gated)     implicit hate
+ ``textdetox``      textdetox/multilingual_toxicity_dataset        toxic, 14 languages
+ ``olid``           OLID/SOLID OffensEval TSV (local file)         toxic
+ ``cyberbullying``  Kaggle cyberbullying_tweets.csv (local file)   hate/toxic
+ ``goemotions``     google-research-datasets/go_emotions           benign negatives
+ ``liar2``          chengxuphd/liar2 fact-checked claims           misinformation
+================= ============================================== ====================
+
+``goemotions`` contributes *clean counterexamples* (hostile-emotion rows are
+dropped, not labeled) to reduce false positives; ``--max-clean-ratio`` keeps
+clean-heavy corpora from drowning the signal.
 
 Examples::
 
+    # one corpus from four Hub datasets, capped and balanced
+    python -m safety.train.finetune_text \
+        --mix civil_comments,davidson,toxigen,goemotions \
+        --max-per-source 50000 --out runs/toxicity
+
     python -m safety.train.finetune_text --preset aegis2 --out runs/aegis
-    python -m safety.train.finetune_text --data mod.csv --text-col text \
-        --labels-col labels --out runs/custom --epochs 3
+    python -m safety.train.finetune_text --preset textdetox --split es \
+        --model microsoft/mdeberta-v3-base --out runs/es   # multilingual base
     python -m safety.train.finetune_text --preset jigsaw --data train.csv \
         --eval-only --model runs/aegis        # metrics only, no training
 
@@ -87,22 +109,30 @@ class Example:
 def rows_to_examples(rows, *, text_col: str, labels_col: str | None = None,
                      label_cols: list[str] | None = None,
                      label_map: dict[str, str] | None = None,
-                     row_labeler=None) -> list[Example]:
+                     row_labeler=None, row_text=None) -> list[Example]:
     """Convert raw rows (dicts) to taxonomy-labeled examples.
 
     Three labeling schemes, used in this order of precedence:
-    * ``row_labeler(row) -> set[str]`` — arbitrary logic (presets use this)
+    * ``row_labeler(row) -> set[str] | None`` — arbitrary logic (presets use
+      this); returning ``None`` drops the row entirely
     * ``labels_col`` — one column holding comma/semicolon-separated labels
     * ``label_cols`` — one 0/1 column per source label
+
+    ``row_text(row) -> str`` overrides ``text_col`` for datasets whose text
+    needs assembly (e.g. HateXplain's token lists).
     """
     out: list[Example] = []
     for row in rows:
-        text = (row.get(text_col) or "").strip()
+        text = (row_text(row) if row_text is not None
+                else row.get(text_col) or "").strip()
         if not text:
             continue
         labels: set[str] = set()
         if row_labeler is not None:
-            labels = {c for c in row_labeler(row) if c in CATEGORIES}
+            raw_labels = row_labeler(row)
+            if raw_labels is None:      # labeler vetoes the row
+                continue
+            labels = {c for c in raw_labels if c in CATEGORIES}
         elif labels_col is not None:
             raw = str(row.get(labels_col) or "")
             for part in raw.replace(";", ",").split(","):
@@ -146,18 +176,167 @@ def _liar2_labeler(row) -> set[str]:
         return set()
 
 
+def _civil_comments_labeler(row) -> set[str]:
+    # Float annotator-fraction scores per column; >=0.5 = positive.
+    def hot(col):
+        try:
+            return float(row.get(col) or 0) >= 0.5
+        except (TypeError, ValueError):
+            return False
+    labels = set()
+    if hot("toxicity") or hot("severe_toxicity") or hot("obscene") or hot("insult"):
+        labels.add(T.TOXIC)
+    if hot("identity_attack"):
+        labels.add(T.HATE)
+    if hot("threat"):
+        labels.add(T.VIOLENCE)
+    if hot("sexual_explicit"):
+        labels.add(T.SEXUAL)
+    return labels
+
+
+def _davidson_labeler(row) -> set[str]:
+    # class: 0 hate speech, 1 offensive language, 2 neither.
+    try:
+        cls = int(row.get("class", 2))
+    except (TypeError, ValueError):
+        return set()
+    return {0: {T.HATE, T.TOXIC}, 1: {T.TOXIC}}.get(cls, set())
+
+
+def _hatexplain_labeler(row) -> set[str]:
+    # Majority vote across the three annotators: 0 hate, 1 normal, 2 offensive.
+    votes = (row.get("annotators") or {}).get("label") or []
+    if not votes:
+        return set()
+    majority = max(set(votes), key=votes.count)
+    return {0: {T.HATE, T.TOXIC}, 2: {T.TOXIC}}.get(majority, set())
+
+
+def _hatexplain_text(row) -> str:
+    return " ".join(row.get("post_tokens") or [])
+
+
+def _toxigen_labeler(row) -> set[str]:
+    # `annotated` config: toxicity_human is a 1-5 mean; ToxiGen statements are
+    # implicit hate aimed at the row's target_group, so toxic ones train HATE.
+    try:
+        score = float(row.get("toxicity_human") or 0)
+    except (TypeError, ValueError):
+        return set()
+    return {T.HATE, T.TOXIC} if score >= 3.5 else set()
+
+
+def _textdetox_labeler(row) -> set[str]:
+    return {T.TOXIC} if str(row.get("toxic", "0")).strip() in {"1", "1.0", "true"} \
+        else set()
+
+
+def _olid_labeler(row) -> set[str]:
+    # OLID/SOLID TSV, subtask A: OFF / NOT (SOLID ships an `average` score).
+    sub_a = str(row.get("subtask_a") or "").strip().upper()
+    if sub_a:
+        return {T.TOXIC} if sub_a == "OFF" else set()
+    try:
+        return {T.TOXIC} if float(row.get("average") or 0) >= 0.5 else set()
+    except (TypeError, ValueError):
+        return set()
+
+
+def _cyberbullying_labeler(row) -> set[str]:
+    # Kaggle cyberbullying_tweets.csv: cyberbullying_type in {not_cyberbullying,
+    # gender, religion, ethnicity, age, other_cyberbullying}.
+    kind = str(row.get("cyberbullying_type") or "").strip().lower()
+    if not kind or kind == "not_cyberbullying":
+        return set()
+    if kind in {"gender", "religion", "ethnicity"}:
+        return {T.HATE, T.TOXIC}
+    return {T.TOXIC}
+
+
+# GoEmotions simplified label ids (0-27) that are safe to treat as benign.
+# Hostile emotions (anger 2, annoyance 3, disapproval 10, disgust 11) are
+# DROPPED, not labeled — emotion is not toxicity ground truth.
+_GOEMOTIONS_HOSTILE = {2, 3, 10, 11}
+
+
+def _goemotions_labeler(row) -> set[str] | None:
+    labels = row.get("labels") or []
+    if any(l in _GOEMOTIONS_HOSTILE for l in labels):
+        return None        # drop: ambiguous for safety training
+    return set()           # clean counterexample (reduces false positives)
+
+
 PRESETS: dict[str, dict] = {
+    # --- multi-category safety -------------------------------------------------
+    "aegis2": dict(
+        hf_dataset="nvidia/Aegis-AI-Content-Safety-Dataset-2.0",
+        text_col="prompt",
+        row_labeler=_aegis_labeler,
+    ),
+    # --- toxicity / hate / offensive -------------------------------------------
     "jigsaw": dict(
         hf_dataset=None,   # bring the Kaggle CSV: --data train.csv
         text_col="comment_text",
         label_cols=["toxic", "severe_toxic", "obscene", "threat",
                     "insult", "identity_hate"],
     ),
-    "aegis2": dict(
-        hf_dataset="nvidia/Aegis-AI-Content-Safety-Dataset-2.0",
-        text_col="prompt",
-        row_labeler=_aegis_labeler,
+    "jigsaw_bias": dict(
+        hf_dataset=None,   # Kaggle unintended-bias CSV: --data train.csv
+        text_col="comment_text",
+        label_cols=["target", "severe_toxicity", "obscene", "threat",
+                    "insult", "identity_attack", "sexual_explicit"],
+        label_map={"target": T.TOXIC, "severe_toxicity": T.TOXIC,
+                   "obscene": T.TOXIC, "insult": T.TOXIC,
+                   "threat": T.VIOLENCE, "identity_attack": T.HATE,
+                   "sexual_explicit": T.SEXUAL},
     ),
+    "civil_comments": dict(
+        hf_dataset="google/civil_comments",
+        text_col="text",
+        row_labeler=_civil_comments_labeler,
+    ),
+    "hatexplain": dict(
+        hf_dataset="Hate-speech-CNERG/hatexplain",   # script dataset: needs
+        text_col="post_tokens",                      # datasets<3 / trust_remote_code
+        row_text=_hatexplain_text,
+        row_labeler=_hatexplain_labeler,
+    ),
+    "davidson": dict(
+        hf_dataset="tdavidson/hate_speech_offensive",
+        text_col="tweet",
+        row_labeler=_davidson_labeler,
+    ),
+    "toxigen": dict(
+        hf_dataset="toxigen/toxigen-data",   # gated: accept the access form
+        hf_config="annotated",
+        text_col="text",
+        row_labeler=_toxigen_labeler,
+    ),
+    "textdetox": dict(
+        hf_dataset="textdetox/multilingual_toxicity_dataset",
+        text_col="text",                     # pick a language: --split en|es|ar|zh…
+        row_labeler=_textdetox_labeler,
+        default_split="en",
+    ),
+    "olid": dict(
+        hf_dataset=None,   # OLID/SOLID TSV from the OffensEval release: --data olid.tsv
+        text_col="tweet",
+        row_labeler=_olid_labeler,
+    ),
+    "cyberbullying": dict(
+        hf_dataset=None,   # Kaggle cyberbullying_tweets.csv: --data file.csv
+        text_col="tweet_text",
+        row_labeler=_cyberbullying_labeler,
+    ),
+    # --- benign hard negatives (reduce false positives) -------------------------
+    "goemotions": dict(
+        hf_dataset="google-research-datasets/go_emotions",
+        hf_config="simplified",
+        text_col="text",
+        row_labeler=_goemotions_labeler,
+    ),
+    # --- misinformation ----------------------------------------------------------
     "liar2": dict(
         hf_dataset="chengxuphd/liar2",
         text_col="statement",
@@ -172,13 +351,16 @@ def load_local_rows(path: str) -> list[dict]:
     if path.endswith((".jsonl", ".ndjson")):
         with open(path, encoding="utf-8") as fh:
             return [json.loads(line) for line in fh if line.strip()]
+    delimiter = "\t" if path.endswith((".tsv", ".tab")) else ","
     with open(path, newline="", encoding="utf-8") as fh:
-        return list(csv.DictReader(fh))
+        return list(csv.DictReader(fh, delimiter=delimiter))
 
 
-def load_hub_rows(dataset: str, split: str) -> list[dict]:
+def load_hub_rows(dataset: str, split: str, config: str | None = None) -> list[dict]:
     from datasets import load_dataset
 
+    if config:
+        return list(load_dataset(dataset, config, split=split))
     return list(load_dataset(dataset, split=split))
 
 
@@ -302,25 +484,77 @@ def evaluate_model(examples: list[Example], model_path: str,
 
 # --- CLI ----------------------------------------------------------------------------
 
-def build_examples(args) -> list[Example]:
-    preset = PRESETS.get(args.preset or "", {})
+def balance_clean(examples: list[Example], max_clean_ratio: float,
+                  seed: int = 13) -> list[Example]:
+    """Cap unlabeled (clean) examples at ``ratio x labeled`` so corpora with a
+    huge clean majority (civil_comments, GoEmotions) don't drown the signal."""
+    import random
+
+    if max_clean_ratio <= 0:
+        return examples
+    labeled = [e for e in examples if e.labels]
+    clean = [e for e in examples if not e.labels]
+    cap = int(len(labeled) * max_clean_ratio)
+    if len(clean) <= cap:
+        return examples
+    rng = random.Random(seed)
+    rng.shuffle(clean)
+    mixed = labeled + clean[:cap]
+    rng.shuffle(mixed)
+    return mixed
+
+
+def examples_from_source(preset_name: str | None, data_path: str | None,
+                         args) -> list[Example]:
+    preset = PRESETS.get(preset_name or "", {})
     text_col = args.text_col or preset.get("text_col") or "text"
     labels_col = args.labels_col or preset.get("labels_col")
     label_cols = (args.label_cols.split(",") if args.label_cols
                   else preset.get("label_cols"))
-    label_map = None
+    label_map = preset.get("label_map")
     if args.label_map:
-        label_map = dict(p.split("=", 1) for p in args.label_map.split(",") if "=" in p)
+        label_map = dict(p.split("=", 1)
+                         for p in args.label_map.split(",") if "=" in p)
 
-    if args.data:
-        rows = load_local_rows(args.data)
+    if data_path:
+        rows = load_local_rows(data_path)
     elif preset.get("hf_dataset"):
-        rows = load_hub_rows(preset["hf_dataset"], args.split)
+        split = args.split or preset.get("default_split") or "train"
+        rows = load_hub_rows(preset["hf_dataset"], split,
+                             config=preset.get("hf_config"))
     else:
-        sys.exit("need --data FILE (or a preset with a Hub dataset)")
-    return rows_to_examples(rows, text_col=text_col, labels_col=labels_col,
-                            label_cols=label_cols, label_map=label_map,
-                            row_labeler=preset.get("row_labeler"))
+        sys.exit(f"preset {preset_name!r} ships as a download — pass the "
+                 f"file with --data FILE")
+    examples = rows_to_examples(rows, text_col=text_col, labels_col=labels_col,
+                                label_cols=label_cols, label_map=label_map,
+                                row_labeler=preset.get("row_labeler"),
+                                row_text=preset.get("row_text"))
+    if args.max_per_source and len(examples) > args.max_per_source:
+        import random
+
+        random.Random(13).shuffle(examples)
+        examples = examples[:args.max_per_source]
+    return examples
+
+
+def build_examples(args) -> list[Example]:
+    sources: list[tuple[str | None, str | None]] = []
+    if args.preset or args.data:
+        sources.append((args.preset, args.data))
+    for name in (args.mix.split(",") if args.mix else []):
+        if name.strip():
+            sources.append((name.strip(), None))
+    if not sources:
+        sys.exit("need --preset, --data, or --mix")
+
+    examples: list[Example] = []
+    for preset_name, data_path in sources:
+        got = examples_from_source(preset_name, data_path, args)
+        n_pos = sum(1 for e in got if e.labels)
+        print(f"#   {preset_name or data_path}: {len(got)} examples "
+              f"({n_pos} labeled)", file=sys.stderr)
+        examples.extend(got)
+    return balance_clean(examples, args.max_clean_ratio)
 
 
 def main(argv=None) -> int:
@@ -330,8 +564,16 @@ def main(argv=None) -> int:
                     "12-category taxonomy.")
     p.add_argument("--preset", choices=sorted(PRESETS),
                    help="dataset preset (column mapping included)")
-    p.add_argument("--data", help="local CSV/JSONL file")
-    p.add_argument("--split", default="train", help="Hub dataset split")
+    p.add_argument("--data", help="local CSV/TSV/JSONL file")
+    p.add_argument("--mix", metavar="P1,P2,…",
+                   help="combine several Hub presets into one training corpus "
+                        "(e.g. civil_comments,davidson,textdetox,goemotions)")
+    p.add_argument("--split", default=None, help="Hub dataset split "
+                   "(textdetox uses language codes: en, es, ar, zh, …)")
+    p.add_argument("--max-per-source", type=int, default=0,
+                   help="cap examples taken from each source (0 = all)")
+    p.add_argument("--max-clean-ratio", type=float, default=2.0,
+                   help="cap clean examples at RATIO x labeled (0 = no cap)")
     p.add_argument("--text-col", help="text column name")
     p.add_argument("--labels-col", help="column with comma-separated labels")
     p.add_argument("--label-cols", help="comma-separated 0/1 label columns")

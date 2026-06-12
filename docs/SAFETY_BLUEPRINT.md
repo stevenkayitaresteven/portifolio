@@ -50,14 +50,37 @@ before commercial redistribution of weights.
 |---|---|---|---|---|---|---|---|
 | Multi-label moderation | [`nvidia/Aegis-AI-Content-Safety-2.0`](https://hf.co/datasets/nvidia/Aegis-AI-Content-Safety-Dataset-2.0) | CC-BY-4.0 | 33.4K | `violated_categories` (13 incl. criminal, fraud, malware, suicide, PII) | LLM-interaction context, broad coverage, safe/unsafe + categories | English-only, prompt/response not chat | **Primary** multi-label backbone (`--preset aegis2`) |
 | Toxicity / hate / threat | [`jigsaw-toxic-comments`](https://hf.co/datasets/anitamaxvim/jigsaw-toxic-comments) | CC0/MIT | ~160K | 6 binary: toxic, severe, obscene, threat, insult, identity_hate | Large, well-studied, multi-label | Comment-style, some label noise | Toxicity/hate/violence head (`--preset jigsaw`) |
+| Toxicity + identity bias | [Jigsaw Unintended Bias](https://www.kaggle.com/c/jigsaw-unintended-bias-in-toxicity-classification) (Kaggle CSV) | CC0 | ~1.8M | continuous toxicity + identity attributes | Huge, fairness-auditable (identity columns) | Kaggle download, fractional labels | Scale + bias evaluation (`--preset jigsaw_bias`) |
+| Toxicity & civility | [`google/civil_comments`](https://hf.co/datasets/google/civil_comments) | CC0-1.0 | ~2M | toxicity/severe/obscene/threat/insult/identity_attack/sexual_explicit (fractions) | Production comment data, 7 facets | Clean-heavy (needs `--max-clean-ratio`) | Main toxicity scale-up (`--preset civil_comments`) |
+| Explainable hate | [`Hate-speech-CNERG/hatexplain`](https://hf.co/datasets/Hate-speech-CNERG/hatexplain) | CC-BY-4.0 | ~20K | hate/offensive/normal ×3 annotators + targets + rationales | Rationale spans, target communities | Script-loader dataset; majority-vote needed | Hate head + explainability eval (`--preset hatexplain`) |
+| Hate vs offensive | [`tdavidson/hate_speech_offensive`](https://hf.co/datasets/tdavidson/hate_speech_offensive) | MIT (code) | 24.8K | hate / offensive / neither | Classic benchmark, separates hate from profanity | Tweets only, 2017-era slang | Hate/toxic disambiguation (`--preset davidson`) |
+| Implicit hate | [`toxigen/toxigen-data`](https://hf.co/datasets/toxigen/toxigen-data) | gated (form) | 274K gen / 9.9K annotated | toxicity_human 1–5 + 13 target groups | **Implicit** hate (no slurs) — hardest FN class | Machine-generated, gated access | Implicit-hate hardening (`--preset toxigen`) |
+| Offensive language | [OLID](https://sites.google.com/site/offensevalsharedtask/olid) / SOLID (TSV) | CC-BY | 14K / 9M | OFF/NOT + targeted/untargeted (SOLID: avg score) | Hierarchical schema; SOLID adds scale | Form/TSV distribution | Offensive head (`--preset olid`) |
+| Cyberbullying | [Kaggle cyberbullying tweets](https://hf.co/datasets?search=cyberbullying) | varies | ~47K | age/ethnicity/gender/religion/other/none | Bullying-specific, protected-class split | Tweet domain | Bullying → hate/toxic (`--preset cyberbullying`) |
+| Benign hard negatives | [`google-research-datasets/go_emotions`](https://hf.co/datasets/go_emotions) | Apache-2.0 | 58K | 27 emotions + neutral | Reduces false positives (heated-but-benign text) | Emotion ≠ toxicity (hostile rows dropped) | FP reduction (`--preset goemotions`) |
 | LLM-prompt toxicity | [`lmsys/toxic-chat`](https://hf.co/datasets/lmsys/toxic-chat) | CC-BY-NC-4.0 | 10K | toxicity + jailbreak | Real user→LLM prompts, jailbreak labels | Small, NC | Calibration / jailbreak eval |
-| Hate speech | [`ucberkeley-dlab/measuring-hate-speech`] | CC-BY-4.0 | 135K | continuous hate score + 10 target groups | Graded, demographic targets | Annotation subjectivity | Hate head fine-tune |
+| Hate speech (graded) | [`ucberkeley-dlab/measuring-hate-speech`] | CC-BY-4.0 | 135K | continuous hate score + 10 target groups | Graded, demographic targets | Annotation subjectivity | Hate head fine-tune |
+| Multilingual hate (LAHM-style) | LAHM ([arXiv:2304.00913](https://arxiv.org/abs/2304.00913)) & similar | paper | multilingual | hate/abuse/racism/sexism/extremism | Cross-lingual abuse facets | No public Hub release — bring CSV | `--labels-col` + generic map (racism/sexism→hate) |
 | Spam | [`mshenoda/spam-messages`](https://hf.co/datasets/mshenoda/spam-messages) | MIT | 17K | spam/ham | Clean, SMS-style | Domain-narrow | Spam head |
 | Phishing | [`ealvaradob/phishing-dataset`](https://hf.co/datasets/ealvaradob/phishing-dataset) | Apache-2.0 | ~80K | phishing/benign (URL+text+email) | Multi-source | Mixed input types | Phishing/URL head |
 | PII | [`ai4privacy/pii-masking-400k`](https://hf.co/datasets/ai4privacy/pii-masking-400k) | (custom) | 400K | token spans, 19 PII classes, 6 langs | Huge, multilingual, span-level | NER not classification | PII token model |
 | Misinformation | [`chengxuphd/liar2`](https://hf.co/datasets/chengxuphd/liar2) | Apache-2.0 | 23K | 6-way truthfulness | Fact-checker labeled | Politics-skewed | Misinfo head (`--preset liar2`) |
 | NSFW image | corpora behind [`Falconsai/nsfw_image_detection`](https://hf.co/Falconsai/nsfw_image_detection) | — | — | nsfw/normal | Battle-tested | Binary only | Image head (already wired) |
-| Multilingual toxicity | [`textdetox/multilingual_toxicity_dataset`] | OpenRAIL | 9 langs | toxic/neutral | Cross-lingual | Per-lang size varies | XLM-R fine-tune (§12) |
+| Multilingual toxicity | [`textdetox/multilingual_toxicity_dataset`](https://hf.co/datasets/textdetox/multilingual_toxicity_dataset) | OpenRAIL++ | 14 langs × 5K | toxic/neutral | Balanced per language (en ru uk de es am zh ar hi it fr he ja tt) | 5K/lang only | XLM-R fine-tune (`--preset textdetox --split <lang>`, §12) |
+
+**Recommended toxicity recipe** (one command, balanced):
+
+```bash
+python -m safety.train.finetune_text \
+    --mix civil_comments,davidson,toxigen,goemotions \
+    --max-per-source 50000 --max-clean-ratio 2.0 --out runs/toxicity-v2
+```
+
+ToxiGen hardens the implicit-hate gap (no slurs → models miss it), Davidson
+separates hate from mere profanity, civil_comments provides scale, and
+GoEmotions injects heated-but-benign hard negatives to keep false positives
+down. Add `--preset jigsaw --data train.csv` corpora for the threat/insult
+facets, and `textdetox` per language for multilingual coverage.
 
 > **Child safety:** never collect, store, or train on CSAM. Use *hash-matching*
 > against known-illegal-content databases (PhotoDNA / NCMEC, Apple/Google CSAI
