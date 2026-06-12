@@ -356,12 +356,19 @@ def load_local_rows(path: str) -> list[dict]:
         return list(csv.DictReader(fh, delimiter=delimiter))
 
 
-def load_hub_rows(dataset: str, split: str, config: str | None = None) -> list[dict]:
+def load_hub_rows(dataset: str, split: str, config: str | None = None,
+                  max_rows: int = 0):
+    """Load a Hub dataset split. Returns the arrow-backed ``Dataset`` (it
+    iterates as dicts) rather than a Python list — civil_comments has 1.8M
+    rows and materializing those as dicts costs gigabytes. ``max_rows``
+    shuffles and selects *before* anything touches Python objects."""
     from datasets import load_dataset
 
-    if config:
-        return list(load_dataset(dataset, config, split=split))
-    return list(load_dataset(dataset, split=split))
+    ds = (load_dataset(dataset, config, split=split) if config
+          else load_dataset(dataset, split=split))
+    if max_rows and len(ds) > max_rows:
+        ds = ds.shuffle(seed=13).select(range(max_rows))
+    return ds
 
 
 # --- metrics (no sklearn) ------------------------------------------------------------
@@ -415,19 +422,32 @@ def train(examples: list[Example], *, base_model: str, out_dir: str,
         ignore_mismatched_sizes=True,  # re-headed when continuing a checkpoint
     )
 
+    # Tokenize lazily per item and pad per *batch* (dynamic padding) — encoding
+    # the whole corpus up front at a fixed length OOM-kills laptop-sized RAM
+    # once the mixed corpus reaches ~100K examples.
     class DS(torch.utils.data.Dataset):
         def __init__(self, ex):
-            self.enc = tok([e.text for e in ex], truncation=True,
-                           max_length=max_length, padding=True)
+            self.texts = [e.text for e in ex]
             self.labels = [e.multi_hot() for e in ex]
 
         def __len__(self):
             return len(self.labels)
 
         def __getitem__(self, i):
-            item = {k: torch.tensor(v[i]) for k, v in self.enc.items()}
-            item["labels"] = torch.tensor(self.labels[i], dtype=torch.float)
-            return item
+            enc = dict(tok(self.texts[i], truncation=True, max_length=max_length))
+            enc["labels"] = self.labels[i]
+            return enc
+
+    from transformers import DataCollatorWithPadding
+
+    pad = DataCollatorWithPadding(tok)
+
+    def collate(batch):
+        labels = torch.tensor([b.pop("labels") for b in batch],
+                              dtype=torch.float)
+        out = pad(batch)
+        out["labels"] = labels
+        return out
 
     n_eval = max(1, int(len(examples) * eval_fraction))
     train_ds, eval_ds = DS(examples[n_eval:]), DS(examples[:n_eval])
@@ -442,12 +462,14 @@ def train(examples: list[Example], *, base_model: str, out_dir: str,
         model=model,
         args=TrainingArguments(
             output_dir=out_dir, num_train_epochs=epochs,
-            per_device_train_batch_size=batch_size, learning_rate=lr,
+            per_device_train_batch_size=batch_size,
+            per_device_eval_batch_size=batch_size, learning_rate=lr,
             eval_strategy="epoch", save_strategy="epoch",
             load_best_model_at_end=True, metric_for_best_model="micro_f1",
             logging_steps=50, report_to=[],
         ),
         train_dataset=train_ds, eval_dataset=eval_ds,
+        data_collator=collate,
         compute_metrics=compute_metrics,
     )
     trainer.train()
@@ -521,7 +543,8 @@ def examples_from_source(preset_name: str | None, data_path: str | None,
     elif preset.get("hf_dataset"):
         split = args.split or preset.get("default_split") or "train"
         rows = load_hub_rows(preset["hf_dataset"], split,
-                             config=preset.get("hf_config"))
+                             config=preset.get("hf_config"),
+                             max_rows=args.max_per_source)
     else:
         sys.exit(f"preset {preset_name!r} ships as a download — pass the "
                  f"file with --data FILE")
