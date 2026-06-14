@@ -12,8 +12,10 @@ python deploy/deploy_to_hf.py   # -> https://huggingface.co/spaces/<you>/sentine
 ```
 
 That creates a Docker Space, uploads the repo, and gives back a public URL.
-The Space runs the offline moderation floor, so it boots on a free CPU box in
-a couple of minutes.
+The Space's `Dockerfile` installs CPU-only torch + the Hugging Face text and
+image models and bakes them into the image, so the demo moderates as well as a
+local full install (it catches implicit toxicity/hate the word list misses).
+First build takes a few minutes; after that, messages are scanned instantly.
 
 ### Any container host (Render / Railway / Fly / Cloud Run)
 
@@ -27,9 +29,10 @@ docker build -t sentinel . && docker run -p 7860:7860 sentinel
 # open http://localhost:7860
 ```
 
-### Turn on the Hugging Face models
+### Toggles
 
-The hosted demo is offline-only by default for speed. To enable the
-transformer ensemble (toxic-bert, NSFW ViT, Whisper), build with the `hf`
-extra and set `SENTINEL_ENABLE_HF=1`. This needs more RAM than a free tier
-usually gives — use a paid instance or run it locally.
+The container sets `SENTINEL_ENABLE_HF=1`, which turns on the Hugging Face
+**text + image** models. To also moderate voice notes with Whisper, set
+`SENTINEL_ENABLE_HF_AUDIO=1` (off by default — CPU transcription is slow). To
+run a purely offline, ultra-light box instead, build without the `hf` extra and
+unset `SENTINEL_ENABLE_HF`.

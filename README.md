@@ -85,9 +85,11 @@ category — is in [`docs/SAFETY_BLUEPRINT.md`](docs/SAFETY_BLUEPRINT.md).
 
 ## Live demo
 
-The repo ships ready to deploy. The hosted demo runs the **offline floor** only
-(no GPU, no model downloads), so it boots on a free CPU box in a couple of
-minutes and anyone with the link can use it.
+The repo ships ready to deploy, and the hosted demo runs the **full Hugging Face
+text + image ensemble** (toxic-bert + KoalaAI moderation + NSFW ViT) on top of
+the offline floor — the models are baked into the image, so it moderates as well
+as a local install and the first message is instant. It runs on a free CPU box,
+and anyone with the link can use it.
 
 **Hugging Face Spaces — one command:**
 
