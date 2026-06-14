@@ -11,8 +11,9 @@ type a threat and it never sends; paste your SSN and it ships as `***-**-6789`;
 drop in an explicit image and your friend receives it blurred; rename `virus.exe`
 to `photo.jpg` and it still gets caught.
 
-> 🟢 **Try it live (no install):** _deploy in one command — see
-> [Live demo](#live-demo)._ &nbsp;|&nbsp; **Source:** you're reading it.
+> 🟢 **[Try it live — no install](https://huggingface.co/spaces/Kstevo34/sentinel-chat)** &nbsp;|&nbsp; **Source:** you're reading it.
+>
+> [![Open in Hugging Face Spaces](https://img.shields.io/badge/🤗%20Try%20it%20live-Sentinel%20Chat-ffce00)](https://huggingface.co/spaces/Kstevo34/sentinel-chat)
 
 > This is a **defensive** tool. It detects and obscures harmful content; it does
 > not generate any. No explicit material is shipped with the repo or needed to
@@ -85,11 +86,13 @@ category — is in [`docs/SAFETY_BLUEPRINT.md`](docs/SAFETY_BLUEPRINT.md).
 
 ## Live demo
 
-The repo ships ready to deploy, and the hosted demo runs the **full Hugging Face
-text + image ensemble** (toxic-bert + KoalaAI moderation + NSFW ViT) on top of
-the offline floor — the models are baked into the image, so it moderates as well
-as a local install and the first message is instant. It runs on a free CPU box,
-and anyone with the link can use it.
+**▶️ It's live at [huggingface.co/spaces/Kstevo34/sentinel-chat](https://huggingface.co/spaces/Kstevo34/sentinel-chat)** — open it and start typing, no install.
+
+The hosted demo runs the **full Hugging Face text + image ensemble** (toxic-bert
++ KoalaAI moderation + NSFW ViT) on top of the offline floor — the models are
+baked into the image, so it moderates as well as a local install and the first
+message is instant. It runs on a free CPU box, and anyone with the link can use
+it. Deploy your own copy in one command:
 
 **Hugging Face Spaces — one command:**
 
