@@ -148,6 +148,22 @@ def cmd_chat(args) -> int:
     return 0
 
 
+def cmd_live(args) -> int:
+    cfg = _config_from_args(args)
+    if args.opencv:
+        from .live import run_opencv
+        return run_opencv(config=cfg, camera=args.camera, width=args.width)
+    try:
+        from .live import serve
+    except Exception as exc:  # pragma: no cover - missing serving deps
+        print(f"!! the live UI needs FastAPI + uvicorn: pip install fastapi "
+              f"uvicorn  ({exc})", file=sys.stderr)
+        return 1
+    serve(host=args.host, port=args.port, open_browser=not args.no_browser,
+          config=cfg)
+    return 0
+
+
 def cmd_debug(args) -> int:
     from . import load_image, save_image, draw_boxes
 
@@ -220,6 +236,20 @@ def build_parser() -> argparse.ArgumentParser:
     c.add_argument("--no-hf", action="store_true",
                    help="disable the Hugging Face backends (offline fallbacks only)")
     c.set_defaults(func=cmd_chat)
+
+    lv = sub.add_parser("live", parents=[common],
+                        help="real-time webcam moderation (blur nudity/gore live)")
+    lv.add_argument("--host", default="127.0.0.1", help="bind host")
+    lv.add_argument("--port", type=int, default=8000, help="bind port")
+    lv.add_argument("--no-browser", action="store_true",
+                    help="don't auto-open a browser tab")
+    lv.add_argument("--opencv", action="store_true",
+                    help="use a native OpenCV window instead of the browser")
+    lv.add_argument("--camera", type=int, default=0,
+                    help="camera index for --opencv (default 0)")
+    lv.add_argument("--width", type=int, default=640,
+                    help="downscale frames to this width")
+    lv.set_defaults(func=cmd_live)
     return p
 
 

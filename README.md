@@ -9,7 +9,8 @@ and a confidence score.
 I wrapped it in a WhatsApp-style chat so you can actually *see* it work:
 type a threat and it never sends; paste your SSN and it ships as `***-**-6789`;
 drop in an explicit image and your friend receives it blurred; rename `virus.exe`
-to `photo.jpg` and it still gets caught.
+to `photo.jpg` and it still gets caught. There's also a **real-time webcam mode**
+(`python -m safety live`) that blurs nudity and gore live, frame by frame.
 
 > 🟢 **[Try it live — no install](https://huggingface.co/spaces/Kstevo34/sentinel-chat)** &nbsp;|&nbsp; **Source:** you're reading it.
 >
@@ -128,9 +129,16 @@ python -m safety chat --no-hf            # force offline-only
 A few things you can do beyond the chat:
 
 ```bash
+python -m safety live                            # real-time webcam: blur nudity/gore live
+python -m safety live --opencv                   # same, in a native OpenCV window
 python -m safety scan ./photos --json            # verdicts only, nothing written
 python -m safety blur ./photos -o ./clean        # write blurred copies + a report
 ```
+
+`live` opens a page that grabs your webcam, streams each frame to the server,
+and paints back the **blurred** frame with a live verdict — nudity and gore are
+obscured the moment they appear on camera. Each frame is moderated in memory and
+dropped; nothing is stored.
 
 ```python
 from safety.multimodal import MultimodalModerator
@@ -209,8 +217,9 @@ careful data work hides behind a single "toxic / not toxic" label.
 
 ## What I'd build next
 
-- **Real-time streaming** so a video is moderated frame-by-frame as it plays
-  rather than re-encoded up front.
+- **Real-time streaming, hardened** — `python -m safety live` already moderates
+  a webcam frame-by-frame; next is GPU/ONNX-accelerated detection and WebRTC so
+  it scales past a few FPS on CPU.
 - **Multilingual coverage** — the lexicon and toxic-bert are English-first;
   swapping in `mdeberta` and the textdetox multilingual data is the obvious next
   step (the training code already accepts it).
