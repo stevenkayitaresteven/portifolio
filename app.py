@@ -36,8 +36,11 @@ from safety.multimodal import MultimodalConfig
 # Build config from SAFETY_MM_* env vars, then apply the deploy toggles.
 config = MultimodalConfig.from_env()
 enable_hf = _on("SENTINEL_ENABLE_HF")
-config.use_hf_text = config.use_hf_image = enable_hf
-# Whisper is the heaviest/slowest path, so it has its own switch.
+# Text is the cheap, high-value model and is on whenever HF is enabled. The
+# image ViT and Whisper are heavier, so each is opt-in — on a free CPU box the
+# offline NudeNet covers images and audio falls back to "flag for review".
+config.use_hf_text = enable_hf
+config.use_hf_image = enable_hf and _on("SENTINEL_ENABLE_HF_IMAGE")
 config.use_hf_audio = enable_hf and _on("SENTINEL_ENABLE_HF_AUDIO")
 
 # `app` is what Gunicorn/Uvicorn import (`app:app`); running this file directly

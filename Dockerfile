@@ -1,8 +1,8 @@
-# Container for the public Sentinel chat demo, with the Hugging Face text +
-# image models baked in so it moderates as well as a local full install
-# (toxic-bert + KoalaAI moderation catch implicit toxicity/hate the offline
-# word list misses). Sized for a free CPU box: CPU-only torch, models cached
-# into the image at build time.
+# Container for the public Sentinel chat demo. Tuned to boot reliably on a free
+# CPU Space: CPU-only torch, a single small text model (toxic-bert) baked in and
+# served offline so the first message is instant and startup is fast. The image
+# ViT and Whisper are left off here (the offline NudeNet covers images); flip
+# SENTINEL_ENABLE_HF_IMAGE=1 / SENTINEL_ENABLE_HF_AUDIO=1 on a bigger box.
 FROM python:3.11-slim
 
 # opencv-python-headless needs libGL/libglib at runtime even on headless boxes.
@@ -18,21 +18,25 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 
 COPY . .
 
-# detectors = offline NudeNet, hf = transformers (text/image models),
-# serve = FastAPI/uvicorn for the chat UI.
+# detectors = offline NudeNet, hf = transformers (text model), serve = chat UI.
 RUN pip install --no-cache-dir -e ".[detectors,hf,serve]"
 
-# Turn the Hugging Face text + image models on (Whisper audio stays opt-in).
+# Enable the HF *text* model only, and use the single lightweight toxic-bert
+# (catches the implicit toxicity/hate the word list misses).
 ENV SENTINEL_ENABLE_HF=1
-# Cache HF weights inside the image so the first message doesn't wait on a
-# download. Must be writable at runtime — Spaces runs as a non-root user.
+ENV SAFETY_MM_TEXT_MODELS=unitary/toxic-bert
+
+# Bake just that one model into the image and serve it fully offline at runtime,
+# so startup never waits on (or fails on) a network download. Cache must be
+# writable — Spaces runs the container as a non-root user.
 ENV HF_HOME=/app/.hf_cache
-RUN mkdir -p /app/.hf_cache && chmod -R 777 /app/.hf_cache && \
-    python -c "from transformers import pipeline; \
-[pipeline('text-classification', model=m, top_k=None, truncation=True) \
- for m in ('KoalaAI/Text-Moderation', 'unitary/toxic-bert')]; \
-pipeline('image-classification', model='Falconsai/nsfw_image_detection')" && \
+ENV HF_HUB_DISABLE_PROGRESS_BARS=1
+RUN mkdir -p /app/.hf_cache && \
+    python -c "from transformers import pipeline; pipeline('text-classification', model='unitary/toxic-bert', top_k=None, truncation=True)" && \
     chmod -R 777 /app/.hf_cache
+# Use the baked cache, never hit the network on model load at runtime.
+ENV HF_HUB_OFFLINE=1
+ENV TRANSFORMERS_OFFLINE=1
 
 # Hugging Face Spaces routes to 7860; other hosts inject $PORT (handled in app.py).
 ENV PORT=7860
