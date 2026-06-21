@@ -35,6 +35,7 @@ class TextModerator:
     def __init__(self, config: MultimodalConfig | None = None):
         self.config = config or MultimodalConfig.from_env()
         self._pipes: dict[str, object] = {}    # model_id -> pipeline | None
+        self._judge = None                     # lazy LLMJudgeModerator
 
     # --- HF backends (lazy, per-model) ----------------------------------------
     @property
@@ -62,6 +63,12 @@ class TextModerator:
             except Exception:
                 self._pipes[model_id] = None  # offline / missing: skip model
         return self._pipes[model_id]
+
+    def _llm_judge(self):
+        if self._judge is None:
+            from .llm_judge import LLMJudgeModerator
+            self._judge = LLMJudgeModerator(self.config)
+        return self._judge
 
     def _model_scores(self, model_id: str, text: str) -> dict[str, float]:
         """Run one model; returns {category: max_score} above threshold."""
@@ -131,6 +138,14 @@ class TextModerator:
                 res.detectors.append(f"hf:{model_id}")
             for cat, score in scores.items():
                 res.add_category(cat, score, f"{cat} {score:.2f} ({model_id})")
+
+        # 5b) optional LLM-as-judge — catches nuance the lexicon/encoders miss
+        if self.config.use_llm_judge:
+            for cat in self._llm_judge().categories(text):
+                res.add_category(cat, 0.75, f"{cat} (llm-judge)")
+            if "llm-judge" not in res.detectors and self._judge is not None \
+                    and self._judge.available:
+                res.detectors.append("llm-judge")
 
         # 6) policy: most severe per-category action wins
         res.flagged = bool(res.categories)

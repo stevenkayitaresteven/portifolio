@@ -32,6 +32,12 @@ files = ["pypdf", "pytesseract", "pillow"]
 serve = ["fastapi", "uvicorn[standard]", "python-multipart"]
 # Fine-tuning the multi-label text classifier and the image classifier.
 train = ["torch", "torchvision", "transformers>=4.45", "datasets", "pillow", "onnx"]
+# Data-prep pipeline (scrape/clean/dedup/label/tokenize). The core pipeline is
+# stdlib-only; `datasets` enables Hub sources and `transformers` enables tokenizing.
+data = ["datasets", "transformers>=4.45"]
+# QLoRA / LoRA fine-tuning of LLM + VLM moderators (needs a GPU to actually run).
+lora = ["torch", "transformers>=4.45", "peft", "trl", "bitsandbytes",
+        "accelerate", "datasets"]
 # Running the test suite.
 test = ["pytest"]
 
@@ -40,7 +46,11 @@ test = ["pytest"]
 sentinel = "safety.cli:main"
 
 [tool.setuptools]
-packages = ["safety", "safety.detectors", "safety.multimodal", "safety.train"]
+packages = ["safety", "safety.detectors", "safety.multimodal", "safety.train",
+            "safety.train.lora", "safety.data"]
+
+[tool.setuptools.package-data]
+"safety.train.lora" = ["configs/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
