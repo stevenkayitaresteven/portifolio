@@ -168,14 +168,37 @@ python -m safety.train.finetune_text --mix civil_comments,davidson,toxigen,goemo
 SAFETY_MM_TEXT_MODELS=runs/toxicity-v2 python -m safety chat   # drop your model in
 ```
 
+## Bringing your own models: data pipeline + LLM judge + LoRA
+
+Beyond the small classifier, the repo has the full path from raw data to a
+fine-tuned LLM moderator:
+
+- **`safety/data/`** — a dependency-light data pipeline: ingest (files, HF Hub,
+  or a `robots.txt`-respecting crawler), clean, **scrub PII while keeping the
+  signal**, exact + near-dup removal (MinHash/LSH), label-mapping or
+  heuristic **weak-labelling**, balance, split, tokenize. Runs offline:
+  `python -m safety.data demo`.
+- **`safety/multimodal/llm_judge.py`** — an optional **LLM-as-judge** backend
+  (local model or any OpenAI-compatible endpoint) that emits the 12-category
+  verdict; off by default, degrades gracefully.
+- **`safety/train/lora/`** — **QLoRA** recipes that fine-tune a general model
+  (Llama 3.1, Mistral 7B, Gemma 3, Qwen, DeepSeek-R1-distill…) or a VLM
+  (Qwen2.5-VL, LLaVA, InternVL, MiniCPM-V) into that judge. A `--dry-run`
+  validates data + config on CPU; the GPU step ships as a Colab notebook.
+
+Full walkthrough: [`docs/DATA_AND_FINETUNING.md`](docs/DATA_AND_FINETUNING.md).
+
 ## Skills
 
 **Applied here:** Python (typed, packaged, `pyproject` + extras), computer
 vision with OpenCV + ONNX, NLP / transformer fine-tuning with Hugging Face
-(`transformers`, `datasets`, multi-label heads, per-class P/R/F1), audio ASR
-(Whisper), FastAPI services and a from-scratch web UI, Docker, system design
-(pluggable detectors, graceful degradation, one normalized result shape), and a
-100+-test suite that runs fully offline.
+(`transformers`, `datasets`, multi-label heads, per-class P/R/F1), **LLM/VLM
+fine-tuning with QLoRA + PEFT/TRL** and an **LLM-as-judge** backend, a
+**data-engineering pipeline** (scraping, PII scrubbing, MinHash/LSH dedup, weak
+labelling, tokenization), audio ASR (Whisper), FastAPI services and a
+from-scratch web UI, Docker, system design (pluggable detectors, graceful
+degradation, one normalized result shape), and a 140+-test suite that runs
+fully offline.
 
 **What I picked up along the way:** that real moderation is a *policy* problem as
 much as an ML one — thresholds, per-category actions, and human-in-the-loop
@@ -210,7 +233,7 @@ careful data work hides behind a single "toxic / not toxic" label.
 ## Tests
 
 ```bash
-pip install -e ".[detectors,serve,test]" && pytest -q   # 100+ tests, all offline
+pip install -e ".[detectors,serve,test]" && pytest -q   # 140+ tests, all offline
 ```
 
 The whole suite runs without a network — the Hugging Face paths are exercised

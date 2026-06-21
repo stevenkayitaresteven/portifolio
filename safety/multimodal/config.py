@@ -34,6 +34,12 @@ class MultimodalConfig:
         "sentinet/suicidality",
     )
     use_specialist_text_models: bool = False   # 3 extra model downloads
+    # Optional LLM-as-judge moderator (off by default — adds latency/compute).
+    # Point at a local HF model OR an OpenAI-compatible endpoint. See
+    # safety/multimodal/llm_judge.py.
+    use_llm_judge: bool = False
+    llm_judge_model: str = ""        # local HF model id or path (e.g. a LoRA merge)
+    llm_judge_endpoint: str = ""     # OpenAI-compatible /chat/completions URL
     # ViT fine-tuned for nsfw/normal binary image classification.
     image_model: str = "Falconsai/nsfw_image_detection"
     # Whisper ASR — audio is transcribed, then the transcript is moderated.
